@@ -1,4 +1,7 @@
-import { Transport } from '@modelcontextprotocol/sdk/shared/transport.js'
+import {
+  Transport,
+  TransportSendOptions,
+} from '@modelcontextprotocol/sdk/shared/transport.js'
 import { JSONRPCMessage } from '@modelcontextprotocol/sdk/types.js'
 import { v4 as uuidv4 } from 'uuid'
 import { WebSocket, WebSocketServer } from 'ws'
@@ -65,11 +68,18 @@ export class WebSocketServerTransport implements Transport {
     })
   }
 
-  async send(msg: JSONRPCMessage, clientId?: string): Promise<void> {
+  async send(
+    message: JSONRPCMessage,
+    options?: TransportSendOptions,
+  ): Promise<void> {
+    // Extract clientId from options meta if available, for backwards compatibility
+    const clientId =
+      (options as any)?.clientId || (options as any)?.meta?.clientId
+
     const [cId, msgId] = clientId?.split(':') ?? []
     // @ts-ignore
-    msg.id = parseInt(msgId)
-    const data = JSON.stringify(msg)
+    message.id = parseInt(msgId) || message.id
+    const data = JSON.stringify(message)
     const deadClients: string[] = []
 
     if (cId) {
@@ -81,13 +91,17 @@ export class WebSocketServerTransport implements Transport {
         this.clients.delete(cId)
         this.ondisconnection?.(cId)
       }
-    }
-
-    for (const [id, client] of this.clients.entries()) {
-      if (client.readyState !== WebSocket.OPEN) {
-        deadClients.push(id)
+    } else {
+      // Broadcast to all clients if no specific client ID
+      for (const [id, client] of this.clients.entries()) {
+        if (client.readyState === WebSocket.OPEN) {
+          client.send(data)
+        } else {
+          deadClients.push(id)
+        }
       }
     }
+
     // Cleanup dead clients
     deadClients.forEach((id) => {
       this.clients.delete(id)
